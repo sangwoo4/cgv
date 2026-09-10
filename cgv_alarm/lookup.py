@@ -1,14 +1,21 @@
 """극장/영화 이름 → 코드 조회 (config.yaml 채우기용)."""
 
+import re
+
 from . import api
 
 
+def norm(s: str) -> str:
+    """이름 매칭용 정규화: 공백·특수문자 제거 + 소문자."""
+    return re.sub(r"[^0-9a-zA-Z가-힣]", "", s).lower()
+
+
 def find_theaters(name: str) -> list[dict]:
-    return [s for s in api.all_sites() if name in s["siteNm"]]
+    return [s for s in api.all_sites() if norm(name) in norm(s["siteNm"])]
 
 
 def find_movies(name: str) -> list[dict]:
-    return [m for m in api.movies_on_sale() if name in m["movNm"]]
+    return [m for m in api.movies_on_sale() if norm(name) in norm(m["movNm"])]
 
 
 def print_theaters(name: str) -> None:

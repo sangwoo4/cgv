@@ -129,7 +129,7 @@ MOVIES = [{"movNo": "30009999", "movNm": "아바타: 새로운 시대", "atktRat
 def test_open_check_fires_and_removes(monkeypatch):
     monkeypatch.setattr(watcher.api, "movies_on_sale", lambda: MOVIES)
     config = {"opens": [{"query": "아바타"}, {"query": "안나오는영화"}]}
-    msgs, errors, changed = watcher.run_open_check(config)
+    msgs, errors, changed = watcher.run_open_check(config, {})
     assert len(msgs) == 1 and "예매 오픈" in msgs[0] and "아바타" in msgs[0]
     assert changed and config["opens"] == [{"query": "안나오는영화"}]
     assert errors == []
@@ -138,7 +138,7 @@ def test_open_check_fires_and_removes(monkeypatch):
 def test_open_check_no_match_keeps(monkeypatch):
     monkeypatch.setattr(watcher.api, "movies_on_sale", lambda: MOVIES)
     config = {"opens": [{"query": "듄3"}]}
-    msgs, errors, changed = watcher.run_open_check(config)
+    msgs, errors, changed = watcher.run_open_check(config, {})
     assert msgs == [] and not changed and len(config["opens"]) == 1
 
 
@@ -151,7 +151,7 @@ def test_open_check_site_scoped(monkeypatch):
         lambda site, ymd, mov: [{"scnYmd": ymd, "scnsrtTm": "1500", "scnsNm": "IMAX관", "bzplcNo": "0013001"}],
     )
     config = {"opens": [{"query": "아바타", "site_no": "0013", "site_nm": "용산아이파크몰"}]}
-    msgs, _, changed = watcher.run_open_check(config)
+    msgs, _, changed = watcher.run_open_check(config, {})
     assert changed and "용산아이파크몰" in msgs[0] and "15:00" in msgs[0]
 
 
@@ -160,5 +160,24 @@ def test_open_check_api_error_keeps_all(monkeypatch):
         raise watcher.api.ApiError("HTTP 403")
     monkeypatch.setattr(watcher.api, "movies_on_sale", boom)
     config = {"opens": [{"query": "아바타"}]}
-    msgs, errors, changed = watcher.run_open_check(config)
+    msgs, errors, changed = watcher.run_open_check(config, {})
     assert msgs == [] and len(errors) == 1 and not changed
+
+
+def test_open_check_normalized_title(monkeypatch):
+    # 띄어쓰기/콜론이 달라도 매칭
+    monkeypatch.setattr(watcher.api, "movies_on_sale", lambda: MOVIES)
+    config = {"opens": [{"query": "아바타 새로운시대"}]}
+    msgs, _, changed = watcher.run_open_check(config, {})
+    assert changed and "예매 오픈" in msgs[0]
+
+
+def test_open_check_fuzzy_typo_notifies_once(monkeypatch):
+    # "새로온"(오타) → 자동 발화는 안 하지만 유사 제목 안내는 1회 발송
+    monkeypatch.setattr(watcher.api, "movies_on_sale", lambda: MOVIES)
+    config = {"opens": [{"query": "아바타 새로온 시대"}]}
+    state = {}
+    msgs, _, changed = watcher.run_open_check(config, state)
+    assert not changed and len(msgs) == 1 and "비슷한 제목" in msgs[0]
+    msgs2, _, _ = watcher.run_open_check(config, state)
+    assert msgs2 == []  # 같은 후보로 재알림 없음

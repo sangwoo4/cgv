@@ -4,11 +4,12 @@
 GitHub Actions cron이 반복시키고, VPS/로컬에서는 loop 명령이 감싼다.
 """
 
+import difflib
 import json
 import time
 from pathlib import Path
 
-from . import api, configfile, notify
+from . import api, configfile, lookup, notify
 
 FAIL_ALERT_THRESHOLD = 3  # 연속 실패 이 횟수부터 장애 알림 1회
 
@@ -115,9 +116,24 @@ def run_check(config: dict, state: dict) -> tuple[list[dict], list[str]]:
     return alerts, errors
 
 
+def _fuzzy_candidates(query: str, movies: list[dict], threshold: float = 0.75) -> list[dict]:
+    """제목 오타를 위한 유사 매칭 — 정규화 후 유사도가 threshold 이상인 영화."""
+    q = lookup.norm(query)
+    out = []
+    for m in movies:
+        t = lookup.norm(m["movNm"])
+        score = max(
+            difflib.SequenceMatcher(None, q, t).ratio(),
+            difflib.SequenceMatcher(None, q, t[: len(q)]).ratio(),
+        )
+        if score >= threshold:
+            out.append(m)
+    return out
+
+
 def _check_open_watch(ow: dict, movies: list[dict]):
     """오픈 감시 1건 판정 → (발화 여부, 알림 문구). movies는 예매 중 영화 목록."""
-    matches = [m for m in movies if ow["query"] in m["movNm"]]
+    matches = [m for m in movies if lookup.norm(ow["query"]) in lookup.norm(m["movNm"])]
     if not matches:
         return False, ""
     if not ow.get("site_no"):
@@ -144,10 +160,12 @@ def _check_open_watch(ow: dict, movies: list[dict]):
     return False, ""
 
 
-def run_open_check(config: dict):
+def run_open_check(config: dict, state: dict):
     """오픈 감시 전체 판정 → (알림 문구들, 오류들, config 변경 여부).
 
     발화한 오픈 감시는 일회성이므로 config에서 제거된다.
+    제목이 정확히 안 맞아도 유사 제목이 오픈되면 안내 알림을 보낸다
+    (오탐일 수 있으니 감시는 유지, 같은 후보로는 한 번만 알림).
     """
     opens = config.get("opens") or []
     if not opens:
@@ -156,6 +174,7 @@ def run_open_check(config: dict):
         movies = api.movies_on_sale()
     except Exception as e:
         return [], [f"오픈 감시 조회 실패: {e}"], False
+    fuzzy_seen = state.setdefault("open_fuzzy_notified", {})
     msgs, errors, remaining = [], [], []
     for ow in opens:
         try:
@@ -164,7 +183,22 @@ def run_open_check(config: dict):
             errors.append(f"오픈 감시 '{ow.get('query')}': {e}")
             remaining.append(ow)
             continue
-        (msgs if fired else remaining).append(msg if fired else ow)
+        if fired:
+            msgs.append(msg)
+            continue
+        remaining.append(ow)
+        for m in _fuzzy_candidates(ow["query"], movies):
+            seen_key = f"{ow['query']}|{ow.get('site_no', '')}"
+            if m["movNo"] in fuzzy_seen.get(seen_key, []):
+                continue
+            fuzzy_seen.setdefault(seen_key, []).append(m["movNo"])
+            rate = f" · 예매율 {m['atktRate']}%" if m.get("atktRate") else ""
+            msgs.append(
+                f"🤔 '{ow['query']}' 오픈을 기다리는 중인데, 비슷한 제목이 예매를 열었어요:\n"
+                f"{m['movNm']}{rate}\n"
+                "기다리시던 영화가 맞다면 이미 오픈된 거예요! 이 오픈 대기는 그대로 뒀으니 "
+                "/list 확인 후 필요 없으면 /remove로 지워주세요."
+            )
     if len(remaining) != len(opens):
         config["opens"] = remaining
         return msgs, errors, True
@@ -188,10 +222,10 @@ def check_once(config_path: Path, state_path: Path) -> int:
         print(f"[watcher] 취소표! {show_key(rec)} → {rec['frSeatCnt']}석")
         notify.send_all(msg)
 
-    open_msgs, open_errors, config_changed = run_open_check(config)
+    open_msgs, open_errors, config_changed = run_open_check(config, state)
     errors.extend(open_errors)
     for msg in open_msgs:
-        print(f"[watcher] 예매 오픈 감지! {msg.splitlines()[1]}")
+        print(f"[watcher] 오픈 알림: {msg.splitlines()[1]}")
         notify.send_all(msg)
     if config_changed:
         configfile.save(config_path, config)  # 발화한 오픈 감시 자동 해제
