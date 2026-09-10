@@ -1,3 +1,11 @@
 # 감시 대상 설정 — 텔레그램 봇 명령(/watch)으로도 관리됩니다.
 # 필드 설명과 코드 조회 방법은 README 참고.
-watches: []
+watches:
+- site_no: 0059
+  site_nm: 영등포타임스퀘어
+  mov_no: '30001323'
+  mov_nm: 오디세이
+  dates:
+  - '20260910'
+  times:
+  - '1730'
