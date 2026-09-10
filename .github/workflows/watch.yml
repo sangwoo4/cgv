@@ -15,7 +15,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -35,8 +35,10 @@ jobs:
           restore-keys: |
             state-
 
+      # cron 최소 간격이 5분이라, 잡 하나가 1분 간격으로 4회 체크해서
+      # 체감 감시 간격을 ~1분으로 좁힌다
       - name: Check
-        run: uv run cgv-alarm check
+        run: uv run cgv-alarm loop --interval 60 --rounds 4
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

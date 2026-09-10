@@ -52,8 +52,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("check", help="1회 체크 후 종료 (GitHub Actions용)")
-    p_loop = sub.add_parser("loop", help="상시 폴링 (로컬/VPS용)")
+    p_loop = sub.add_parser("loop", help="반복 폴링 (Actions/로컬/VPS용)")
     p_loop.add_argument("--interval", type=int, default=120, help="폴링 간격(초)")
+    p_loop.add_argument("--rounds", type=int, default=0, help="이 횟수만 돌고 종료 (0=무한)")
     sub.add_parser("status", help="감시 대상 회차의 현재 잔여석 출력")
     p_lookup = sub.add_parser("lookup", help="극장/영화 코드 조회")
     p_lookup.add_argument("kind", choices=["theater", "movie"])
@@ -85,11 +86,15 @@ def main() -> None:
         one_round()
         sys.exit(0)
     if args.cmd == "loop":
+        n = 0
         while True:
             try:
                 one_round()
             except Exception as e:
                 print(f"[loop] 체크 실패: {e}")
+            n += 1
+            if args.rounds and n >= args.rounds:
+                break
             time.sleep(args.interval)
 
 
