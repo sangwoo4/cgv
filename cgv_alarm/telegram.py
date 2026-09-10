@@ -261,6 +261,7 @@ def process_commands(config_path: Path, state_path: Path) -> bool:
     updates = res.json().get("result", [])
     if not updates:
         return False
+    print(f"[telegram] 새 업데이트 {len(updates)}건")
 
     config = configfile.load(config_path)
     changed = False
@@ -271,7 +272,8 @@ def process_commands(config_path: Path, state_path: Path) -> bool:
         if not text:
             continue
         if str(msg.get("chat", {}).get("id")) != str(chat_id):
-            continue  # 허용된 chat 외 무시
+            print(f"[telegram] 무시(허용 외 chat {msg.get('chat', {}).get('id')}): {text[:40]}")
+            continue
         # 명령은 /로 시작해야 한다. 일반 문장은 1:1 채팅에서만 도움말 안내 (그룹에선 침묵)
         if not text.startswith("/"):
             if msg.get("chat", {}).get("type") == "private":
@@ -282,8 +284,10 @@ def process_commands(config_path: Path, state_path: Path) -> bool:
             continue
         try:
             reply, ch = handle_command(text, config)
+            print(f"[telegram] 명령 처리: {text[:60]} (config 변경={ch})")
         except Exception as e:
             reply, ch = f"처리 중 오류가 났어요: {e}", False
+            print(f"[telegram] 명령 오류: {text[:60]} → {e}")
         changed = changed or ch
         try:
             _send(token, str(msg["chat"]["id"]), reply)
