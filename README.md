@@ -7,6 +7,8 @@ GitHub Actions cron(5분 간격)으로 무료로 돌아가며 서버가 필요 �
 
 CGV 비공식 API(`cgv.co.kr/api/v1/booking/*`)에서 회차별 잔여석(`frSeatCnt`)을
 조회하고, `0 → 양수` 전환을 감지하면 알림을 보낸다. 로그인·쿠키 불필요.
+(Cloudflare가 TLS 지문을 검사해 데이터센터 IP에서 403을 주므로, curl_cffi의
+브라우저 지문 모방으로 우회한다 — GitHub Actions 러너에서 검증됨)
 
 - 매진 판정: `frSeatCnt == 0 && cntlYn == 'N'` (`cntlYn == 'Y'`는 판매통제/미오픈)
 - 알림 후 재매진되기 전까지는 같은 회차로 다시 알리지 않음

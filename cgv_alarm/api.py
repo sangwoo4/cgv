@@ -1,12 +1,13 @@
 """CGV 비공식 API 클라이언트.
 
-전 엔드포인트가 인증 없는 GET·JSON. Cloudflare는 HTTP/1.1 + 브라우저 UA면
-통과하므로 requests(기본 HTTP/1.1)로 충분하다. HTTP/2로 붙으면 403이 난다.
+전 엔드포인트가 인증 없는 GET·JSON. Cloudflare가 TLS 지문을 검사해서
+일반 requests는 주거용 IP에서만 통과하고 데이터센터 IP(GitHub Actions 등)에선
+403이 난다. curl_cffi의 브라우저 지문 모방(impersonate)으로 양쪽 모두 통과한다.
 """
 
 import time
 
-import requests
+from curl_cffi import requests
 
 BASE = "https://cgv.co.kr/api/v1"
 CO_CD = "A420"  # CJ CGV 한국 법인코드 (고정)
@@ -28,9 +29,16 @@ class ApiError(Exception):
 def _get(path: str, params: dict, retries: int = 2):
     params = {"coCd": CO_CD, **params}
     last_err = None
+    impersonate = ["chrome", "safari", "firefox135"]  # 403 시 다음 지문으로 재시도
     for attempt in range(retries + 1):
         try:
-            res = requests.get(f"{BASE}{path}", params=params, headers=HEADERS, timeout=15)
+            res = requests.get(
+                f"{BASE}{path}",
+                params=params,
+                headers=HEADERS,
+                timeout=15,
+                impersonate=impersonate[min(attempt, len(impersonate) - 1)],
+            )
             if res.status_code != 200:
                 raise ApiError(f"HTTP {res.status_code} {path}")
             body = res.json()
@@ -39,7 +47,7 @@ def _get(path: str, params: dict, retries: int = 2):
                     f"statusCode={body.get('statusCode')} ({body.get('statusMessage')}) {path}"
                 )
             return body["data"]
-        except (requests.RequestException, ValueError, KeyError, ApiError) as e:
+        except (requests.RequestsError, ValueError, KeyError, ApiError) as e:
             last_err = e
             if attempt < retries:
                 time.sleep(2 * (attempt + 1))
