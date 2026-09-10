@@ -2,7 +2,8 @@ name: watch
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    # 정각/5분 정시는 전 세계 워크플로가 몰려 지연이 심하므로 1분 비껴서 등록
+    - cron: '1-59/5 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -35,10 +36,10 @@ jobs:
           restore-keys: |
             state-
 
-      # cron 최소 간격이 5분이라, 잡 하나가 1분 간격으로 4회 체크해서
-      # 체감 감시 간격을 ~1분으로 좁힌다
+      # cron 최소 간격이 5분이라, 잡 하나가 55초 간격 5회 체크로 ~4.6분을 커버해
+      # 체감 감시 간격을 ~1분으로 좁히고 cron 지연 시 공백도 줄인다
       - name: Check
-        run: uv run cgv-alarm loop --interval 60 --rounds 4
+        run: uv run cgv-alarm loop --interval 55 --rounds 5
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
