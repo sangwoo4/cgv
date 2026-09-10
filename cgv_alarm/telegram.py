@@ -151,19 +151,27 @@ def _cmd_remove(tokens: list[str], config: dict):
     return f"해제했어요 🗑\n{_watch_label(removed)}", True
 
 
+KNOWN_COMMANDS = {"watch", "list", "remove", "help", "start"}
+
+
+def _normalize_cmd(text: str) -> str:
+    """첫 토큰을 명령어로 정규화. "/watch@봇이름", "watch", "/watch" 모두 "watch"."""
+    return text.strip().split()[0].split("@")[0].lstrip("/").lower() if text.strip() else ""
+
+
 def handle_command(text: str, config: dict, today: datetime.date | None = None):
-    """명령 1건 처리 → (응답 문구, config 변경 여부)"""
+    """명령 1건 처리 → (응답 문구, config 변경 여부). 슬래시 없는 명령도 허용."""
     today = today or datetime.date.today()
     tokens = text.strip().split()
-    cmd = tokens[0].split("@")[0].lower()  # "/watch@봇이름" 형태 지원
+    cmd = _normalize_cmd(text)
     args = tokens[1:]
-    if cmd == "/watch":
+    if cmd == "watch":
         return _cmd_watch(args, config, today)
-    if cmd == "/list":
+    if cmd == "list":
         return _cmd_list(config)
-    if cmd == "/remove":
+    if cmd == "remove":
         return _cmd_remove(args, config)
-    return HELP, False  # /start, /help, 그 외 전부
+    return HELP, False  # start, help, 그 외 전부
 
 
 def _send(token: str, chat_id: str, text: str) -> None:
@@ -207,11 +215,19 @@ def process_commands(config_path: Path, state_path: Path) -> bool:
     for upd in updates:
         state["tg_offset"] = max(state.get("tg_offset", 0), upd["update_id"])
         msg = upd.get("message") or {}
-        text = msg.get("text", "")
-        if not text.startswith("/"):
+        text = msg.get("text", "").strip()
+        if not text:
             continue
         if str(msg.get("chat", {}).get("id")) != str(chat_id):
             continue  # 허용된 chat 외 무시
+        # 명령이 아닌 일반 문장: 1:1 채팅에서만 도움말로 안내 (그룹에선 침묵)
+        if not text.startswith("/") and _normalize_cmd(text) not in KNOWN_COMMANDS:
+            if msg.get("chat", {}).get("type") == "private":
+                try:
+                    _send(token, str(msg["chat"]["id"]), HELP)
+                except Exception as e:
+                    print(f"[telegram] 응답 발송 실패: {e}")
+            continue
         try:
             reply, ch = handle_command(text, config)
         except Exception as e:

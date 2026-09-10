@@ -97,3 +97,17 @@ def test_watch_reply_warns_when_no_match(fake_lookup, monkeypatch):
     config = {"watches": []}
     reply, changed = telegram.handle_command("/watch 용산 오디세이 0912 07:77", config, TODAY)
     assert changed and "⚠️" in reply
+
+
+def test_command_without_slash(fake_lookup):
+    config = {"watches": []}
+    reply, changed = telegram.handle_command("watch 용산 오디세이", config, TODAY)
+    assert changed and "등록했어요" in reply
+    reply, _ = telegram.handle_command("list", config, TODAY)
+    assert "1." in reply
+
+
+def test_normalize_cmd():
+    assert telegram._normalize_cmd("/watch@cgv_sw_bot 용산") == "watch"
+    assert telegram._normalize_cmd("WATCH 용산") == "watch"
+    assert telegram._normalize_cmd("아무말") == "아무말"
