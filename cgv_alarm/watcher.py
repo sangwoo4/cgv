@@ -8,7 +8,7 @@ import json
 import time
 from pathlib import Path
 
-from . import api, notify
+from . import api, configfile, notify
 
 FAIL_ALERT_THRESHOLD = 3  # 연속 실패 이 횟수부터 장애 알림 1회
 
@@ -115,8 +115,65 @@ def run_check(config: dict, state: dict) -> tuple[list[dict], list[str]]:
     return alerts, errors
 
 
-def check_once(config: dict, state_path: Path) -> int:
+def _check_open_watch(ow: dict, movies: list[dict]):
+    """오픈 감시 1건 판정 → (발화 여부, 알림 문구). movies는 예매 중 영화 목록."""
+    matches = [m for m in movies if ow["query"] in m["movNm"]]
+    if not matches:
+        return False, ""
+    if not ow.get("site_no"):
+        m = matches[0]
+        rate = f" · 예매율 {m['atktRate']}%" if m.get("atktRate") else ""
+        return True, (
+            f"🎟 예매 오픈!\n{m['movNm']}{rate}\nhttps://cgv.co.kr\n"
+            "(이 오픈 알림은 자동 해제됐어요. 원하는 회차가 매진되면 /watch로 취소표 감시를 등록하세요.)"
+        )
+    # 극장 한정: 그 극장 시간표에 해당 영화 회차가 뜨는지
+    site = str(ow["site_no"])
+    for m in matches:
+        for ymd in api.open_dates(site):
+            recs = api.schedule_by_movie(site, ymd, m["movNo"])
+            if recs:
+                r = recs[0]
+                return True, (
+                    f"🎟 예매 오픈!\n{m['movNm']} · CGV {ow.get('site_nm', site)}\n"
+                    f"첫 회차: {format_date(r['scnYmd'])} {format_time(r['scnsrtTm'])} {r['scnsNm']}\n"
+                    f"예매: https://cgv.co.kr/cnm/bzplcCgv/{r['bzplcNo']}\n"
+                    "(이 오픈 알림은 자동 해제됐어요.)"
+                )
+            time.sleep(0.3)
+    return False, ""
+
+
+def run_open_check(config: dict):
+    """오픈 감시 전체 판정 → (알림 문구들, 오류들, config 변경 여부).
+
+    발화한 오픈 감시는 일회성이므로 config에서 제거된다.
+    """
+    opens = config.get("opens") or []
+    if not opens:
+        return [], [], False
+    try:
+        movies = api.movies_on_sale()
+    except Exception as e:
+        return [], [f"오픈 감시 조회 실패: {e}"], False
+    msgs, errors, remaining = [], [], []
+    for ow in opens:
+        try:
+            fired, msg = _check_open_watch(ow, movies)
+        except Exception as e:
+            errors.append(f"오픈 감시 '{ow.get('query')}': {e}")
+            remaining.append(ow)
+            continue
+        (msgs if fired else remaining).append(msg if fired else ow)
+    if len(remaining) != len(opens):
+        config["opens"] = remaining
+        return msgs, errors, True
+    return msgs, errors, False
+
+
+def check_once(config_path: Path, state_path: Path) -> int:
     """1회 체크. 반환값은 프로세스 종료 코드."""
+    config = configfile.load(config_path)
     state = {}
     if state_path.exists():
         try:
@@ -130,6 +187,14 @@ def check_once(config: dict, state_path: Path) -> int:
         msg = alert_message(rec)
         print(f"[watcher] 취소표! {show_key(rec)} → {rec['frSeatCnt']}석")
         notify.send_all(msg)
+
+    open_msgs, open_errors, config_changed = run_open_check(config)
+    errors.extend(open_errors)
+    for msg in open_msgs:
+        print(f"[watcher] 예매 오픈 감지! {msg.splitlines()[1]}")
+        notify.send_all(msg)
+    if config_changed:
+        configfile.save(config_path, config)  # 발화한 오픈 감시 자동 해제
 
     if errors:
         state["fail_count"] = state.get("fail_count", 0) + 1
@@ -148,7 +213,7 @@ def check_once(config: dict, state_path: Path) -> int:
     shows = state.get("shows", {})
     sold_out = sum(1 for s in shows.values() if s["frSeatCnt"] == 0)
     print(
-        f"[watcher] 감시 중 {len(shows)}개 회차 (매진 {sold_out}), "
-        f"알림 {len(alerts)}건, 오류 {len(errors)}건"
+        f"[watcher] 감시 중 {len(shows)}개 회차 (매진 {sold_out}) + 오픈 대기 "
+        f"{len(config.get('opens') or [])}건, 알림 {len(alerts) + len(open_msgs)}건, 오류 {len(errors)}건"
     )
     return 0

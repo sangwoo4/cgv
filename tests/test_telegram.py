@@ -102,3 +102,25 @@ def test_watch_reply_warns_when_no_match(fake_lookup, monkeypatch):
 def test_normalize_cmd():
     assert telegram._normalize_cmd("/watch@cgv_sw_bot 용산") == "watch"
     assert telegram._normalize_cmd("아무말") == "아무말"
+
+
+def test_open_register_and_list_remove(fake_lookup, monkeypatch):
+    config = {"watches": []}
+    telegram.handle_command("/watch 용산 오디세이", config, TODAY)
+    monkeypatch.setattr(telegram.lookup, "find_movies", lambda q: [])
+    reply, changed = telegram.handle_command("/open 아바타", config, TODAY)
+    assert changed and "오픈 알림 등록" in reply
+    reply, _ = telegram.handle_command("/list", config, TODAY)
+    assert "1. " in reply and "2. [오픈 대기]" in reply
+    reply, changed = telegram.handle_command("/remove 2", config, TODAY)
+    assert changed and config["opens"] == [] and len(config["watches"]) == 1
+
+
+def test_open_already_on_sale(fake_lookup, monkeypatch):
+    monkeypatch.setattr(
+        telegram.lookup, "find_movies",
+        lambda q: [{"movNo": "30001323", "movNm": "오디세이", "atktRate": "49.7"}],
+    )
+    config = {}
+    reply, changed = telegram.handle_command("/open 오디세이", config, TODAY)
+    assert not changed and "이미 예매가 열려" in reply

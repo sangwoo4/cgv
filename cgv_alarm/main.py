@@ -80,7 +80,7 @@ def main() -> None:
             telegram.process_commands(Path(args.config), Path(args.state))
         except Exception as e:
             print(f"[telegram] 명령 처리 실패: {e}")
-        watcher.check_once(load_config(args.config), Path(args.state))
+        watcher.check_once(Path(args.config), Path(args.state))
 
     if args.cmd == "check":
         one_round()

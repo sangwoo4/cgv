@@ -106,12 +106,14 @@ def test_fail_alert_after_threshold(monkeypatch, tmp_path):
     monkeypatch.setattr(watcher.notify, "send_all", lambda t: sent.append(t) or True)
     monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], ["HTTP 403"]))
     state_path = tmp_path / "state.json"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("watches: []\n")
     for _ in range(4):
-        watcher.check_once({}, state_path)
+        watcher.check_once(config_path, state_path)
     assert len(sent) == 1 and "실패" in sent[0]
     # 복구되면 카운터 리셋
     monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], []))
-    watcher.check_once({}, state_path)
+    watcher.check_once(config_path, state_path)
     st = json.loads(state_path.read_text())
     assert st["fail_count"] == 0 and st["fail_alerted"] is False
 
@@ -119,3 +121,44 @@ def test_fail_alert_after_threshold(monkeypatch, tmp_path):
 def test_format_time_over_24h():
     assert watcher.format_time("2500") == "익일 01:00"
     assert watcher.format_time("1830") == "18:30"
+
+
+MOVIES = [{"movNo": "30009999", "movNm": "아바타: 새로운 시대", "atktRate": "31.2"}]
+
+
+def test_open_check_fires_and_removes(monkeypatch):
+    monkeypatch.setattr(watcher.api, "movies_on_sale", lambda: MOVIES)
+    config = {"opens": [{"query": "아바타"}, {"query": "안나오는영화"}]}
+    msgs, errors, changed = watcher.run_open_check(config)
+    assert len(msgs) == 1 and "예매 오픈" in msgs[0] and "아바타" in msgs[0]
+    assert changed and config["opens"] == [{"query": "안나오는영화"}]
+    assert errors == []
+
+
+def test_open_check_no_match_keeps(monkeypatch):
+    monkeypatch.setattr(watcher.api, "movies_on_sale", lambda: MOVIES)
+    config = {"opens": [{"query": "듄3"}]}
+    msgs, errors, changed = watcher.run_open_check(config)
+    assert msgs == [] and not changed and len(config["opens"]) == 1
+
+
+def test_open_check_site_scoped(monkeypatch):
+    monkeypatch.setattr(watcher.api, "movies_on_sale", lambda: MOVIES)
+    monkeypatch.setattr(watcher.api, "open_dates", lambda site: ["20260920"])
+    monkeypatch.setattr(
+        watcher.api,
+        "schedule_by_movie",
+        lambda site, ymd, mov: [{"scnYmd": ymd, "scnsrtTm": "1500", "scnsNm": "IMAX관", "bzplcNo": "0013001"}],
+    )
+    config = {"opens": [{"query": "아바타", "site_no": "0013", "site_nm": "용산아이파크몰"}]}
+    msgs, _, changed = watcher.run_open_check(config)
+    assert changed and "용산아이파크몰" in msgs[0] and "15:00" in msgs[0]
+
+
+def test_open_check_api_error_keeps_all(monkeypatch):
+    def boom():
+        raise watcher.api.ApiError("HTTP 403")
+    monkeypatch.setattr(watcher.api, "movies_on_sale", boom)
+    config = {"opens": [{"query": "아바타"}]}
+    msgs, errors, changed = watcher.run_open_check(config)
+    assert msgs == [] and len(errors) == 1 and not changed

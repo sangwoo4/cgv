@@ -1,4 +1,4 @@
-"""텔레그램 봇 명령 처리: /watch /list /remove /help
+"""텔레그램 봇 명령 처리: /watch /open /list /remove /help
 
 봇이 상주하지 않는 구조(Actions cron)라 매 실행마다 getUpdates로 밀린
 명령을 모아 처리한다. 응답은 다음 cron 주기(최대 5~10분)에 도착한다.
@@ -11,9 +11,7 @@ import os
 from pathlib import Path
 
 import requests
-import yaml
-
-from . import lookup, watcher
+from . import configfile, lookup, watcher
 
 HELP = """CGV 취소표 알람 봇 명령:
 
@@ -21,18 +19,16 @@ HELP = """CGV 취소표 알람 봇 명령:
   예: /watch 용산 오디세이 0912 18:00
   날짜는 0912 또는 20260912, 시간은 18:00 형식 (여러 개 가능)
   영화 생략 시 극장 전체, 날짜 생략 시 예매 오픈된 전 날짜
+/open 영화 — 예매 오픈 알림 (아직 예매 안 열린 영화)
+  예: /open 아바타
+  극장을 먼저 쓰면 그 극장 한정: /open 용산아이파크몰 아바타
+  오픈 알림은 한 번 울리면 자동 해제돼요
 /list — 감시 목록
 /remove 번호 — 감시 해제 (/list에 나온 번호)
 /help — 이 도움말
 
 명령 처리는 최대 5~10분 걸릴 수 있어요.
 매진 회차에 취소표가 나오면 바로 알려드립니다."""
-
-CONFIG_HEADER = (
-    "# 감시 대상 설정 — 텔레그램 봇 명령(/watch)으로도 관리됩니다.\n"
-    "# 필드 설명과 코드 조회 방법은 README 참고.\n"
-)
-
 
 def _expand_date(mmdd: str, today: datetime.date) -> str:
     """MMDD → YYYYMMDD. 이미 지난 날짜면 내년으로 해석."""
@@ -135,20 +131,77 @@ def _cmd_watch(tokens: list[str], config: dict, today: datetime.date):
     return reply, True
 
 
+def _open_label(ow: dict) -> str:
+    scope = f"CGV {ow['site_nm']}" if ow.get("site_nm") else "전국"
+    return f"[오픈 대기] '{ow['query']}' · {scope}"
+
+
+def _cmd_open(tokens: list[str], config: dict):
+    if not tokens:
+        return "영화 이름이 필요해요. 예: /open 아바타  또는  /open 용산아이파크몰 아바타", False
+
+    site, words = None, tokens
+    if len(tokens) >= 2:
+        cands = lookup.find_theaters(tokens[0])
+        if len(cands) == 1:
+            site, words = cands[0], tokens[1:]
+        elif len(cands) > 1:
+            opts = "\n".join(f"- {s['siteNm']}" for s in cands[:10])
+            return f"극장이 여러 개 검색돼요. 더 정확히 써주세요:\n{opts}", False
+    query = " ".join(words)
+
+    ow = {"query": query}
+    if site:
+        ow["site_no"] = site["siteNo"]
+        ow["site_nm"] = site["siteNm"]
+
+    # 이미 오픈됐는지 즉시 확인
+    try:
+        movies = lookup.find_movies(query)
+    except Exception:
+        movies = []
+    if movies:
+        fired, msg = watcher._check_open_watch(ow, movies)
+        if fired:
+            return "이미 예매가 열려 있어요!\n" + msg.split("\n(")[0] + "\n매진 회차 취소표는 /watch로 감시하세요.", False
+        # 전국 기준으론 오픈됐지만 지정 극장엔 아직 → 극장 오픈 대기로 등록 (아래로 진행)
+
+    opens = config.get("opens") or []
+    if ow in opens:
+        return "이미 등록돼 있어요.", False
+    opens.append(ow)
+    config["opens"] = opens
+    scope = f"CGV {site['siteNm']}에 시간표가 뜨면" if site else "예매가 열리면"
+    return f"오픈 알림 등록 ✅\n'{query}' — {scope} 바로 알려드려요.\n(한 번 울리면 자동 해제)", True
+
+
+def _all_entries(config: dict):
+    return [("watch", w) for w in (config.get("watches") or [])] + [
+        ("open", o) for o in (config.get("opens") or [])
+    ]
+
+
 def _cmd_list(config: dict):
-    watches = config.get("watches") or []
-    if not watches:
-        return "등록된 감시가 없어요. /watch로 등록하세요.", False
-    lines = [f"{i}. {_watch_label(w)}" for i, w in enumerate(watches, 1)]
+    entries = _all_entries(config)
+    if not entries:
+        return "등록된 감시가 없어요. /watch 또는 /open으로 등록하세요.", False
+    lines = [
+        f"{i}. {_watch_label(item) if kind == 'watch' else _open_label(item)}"
+        for i, (kind, item) in enumerate(entries, 1)
+    ]
     return "감시 목록:\n" + "\n".join(lines), False
 
 
 def _cmd_remove(tokens: list[str], config: dict):
-    watches = config.get("watches") or []
-    if not tokens or not tokens[0].isdigit() or not (1 <= int(tokens[0]) <= len(watches)):
+    entries = _all_entries(config)
+    if not tokens or not tokens[0].isdigit() or not (1 <= int(tokens[0]) <= len(entries)):
         return "해제할 번호를 주세요. 예: /remove 1 (번호는 /list 참고)", False
-    removed = watches.pop(int(tokens[0]) - 1)
-    return f"해제했어요 🗑\n{_watch_label(removed)}", True
+    kind, item = entries[int(tokens[0]) - 1]
+    if kind == "watch":
+        config["watches"].remove(item)
+        return f"해제했어요 🗑\n{_watch_label(item)}", True
+    config["opens"].remove(item)
+    return f"해제했어요 🗑\n{_open_label(item)}", True
 
 
 def _normalize_cmd(text: str) -> str:
@@ -168,6 +221,8 @@ def handle_command(text: str, config: dict, today: datetime.date | None = None):
         return _cmd_list(config)
     if cmd == "remove":
         return _cmd_remove(args, config)
+    if cmd == "open":
+        return _cmd_open(args, config)
     return HELP, False  # start, help, 그 외 전부
 
 
@@ -207,7 +262,7 @@ def process_commands(config_path: Path, state_path: Path) -> bool:
     if not updates:
         return False
 
-    config = yaml.safe_load(config_path.read_text()) or {}
+    config = configfile.load(config_path)
     changed = False
     for upd in updates:
         state["tg_offset"] = max(state.get("tg_offset", 0), upd["update_id"])
@@ -236,8 +291,6 @@ def process_commands(config_path: Path, state_path: Path) -> bool:
             print(f"[telegram] 응답 발송 실패: {e}")
 
     if changed:
-        config_path.write_text(
-            CONFIG_HEADER + yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
-        )
+        configfile.save(config_path, config)
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=1))
     return changed
