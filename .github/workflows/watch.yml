@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write  # 봇 명령으로 바뀐 config.yaml 커밋용
 
 jobs:
   check:
@@ -48,3 +48,16 @@ jobs:
         with:
           path: state.json
           key: state-${{ github.run_id }}
+
+      # 텔레그램 /watch, /remove 명령이 config.yaml을 바꿨으면 커밋
+      - name: Commit watch changes
+        if: always()
+        run: |
+          if ! git diff --quiet config.yaml; then
+            git config user.name "cgv-alarm-bot"
+            git config user.email "noreply@github.com"
+            git add config.yaml
+            git commit -m "bot: 감시 대상 변경"
+            git pull --rebase origin main
+            git push
+          fi

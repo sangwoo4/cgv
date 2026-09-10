@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from . import lookup, notify, watcher
+from . import lookup, notify, telegram, watcher
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -70,15 +70,24 @@ def main() -> None:
         ok = notify.send_all("✅ CGV 취소표 알람 테스트 메시지입니다.")
         sys.exit(0 if ok else 1)
 
-    config = load_config(args.config)
     if args.cmd == "status":
-        sys.exit(cmd_status(config))
+        sys.exit(cmd_status(load_config(args.config)))
+
+    def one_round():
+        # 봇 명령이 config를 바꿀 수 있으니 명령 처리 → 로드 → 체크 순서
+        try:
+            telegram.process_commands(Path(args.config), Path(args.state))
+        except Exception as e:
+            print(f"[telegram] 명령 처리 실패: {e}")
+        watcher.check_once(load_config(args.config), Path(args.state))
+
     if args.cmd == "check":
-        sys.exit(watcher.check_once(config, Path(args.state)))
+        one_round()
+        sys.exit(0)
     if args.cmd == "loop":
         while True:
             try:
-                watcher.check_once(config, Path(args.state))
+                one_round()
             except Exception as e:
                 print(f"[loop] 체크 실패: {e}")
             time.sleep(args.interval)
