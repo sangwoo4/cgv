@@ -13,7 +13,7 @@ from pathlib import Path
 import requests
 import yaml
 
-from . import lookup
+from . import lookup, watcher
 
 HELP = """CGV 취소표 알람 봇 명령:
 
@@ -107,7 +107,32 @@ def _cmd_watch(tokens: list[str], config: dict, today: datetime.date):
     if watch in config["watches"]:
         return "이미 등록돼 있어요.", False
     config["watches"].append(watch)
-    return f"등록했어요 ✅\n{_watch_label(watch)}\n({movie_label} 매진 회차에 취소표가 나오면 알림)", True
+
+    # 조건에 맞는 회차를 즉시 조회해서 보여준다 — 시간/날짜 오타로
+    # 아무것도 감시하지 않는 상태를 등록 시점에 드러내기 위함
+    reply = f"등록했어요 ✅\n{_watch_label(watch)}"
+    try:
+        records, _ = watcher.fetch_watch(watch)
+        if not records:
+            reply += (
+                "\n⚠️ 지금 이 조건에 맞는 회차가 하나도 없어요."
+                "\n날짜/시간이 정확한지 확인해보세요 (시간은 상영시간표의 시작시간과 같아야 해요)."
+            )
+        else:
+            sold = sum(1 for r in records if int(r["frSeatCnt"]) == 0)
+            reply += f"\n매칭 회차 {len(records)}개 (현재 매진 {sold}개):"
+            for r in records[:5]:
+                state = "매진" if int(r["frSeatCnt"]) == 0 else f"잔여 {r['frSeatCnt']}석"
+                reply += (
+                    f"\n- {watcher.format_date(r['scnYmd'])} "
+                    f"{watcher.format_time(r['scnsrtTm'])} {r['scnsNm']} · {state}"
+                )
+            if len(records) > 5:
+                reply += f"\n… 외 {len(records) - 5}개"
+            reply += "\n매진 회차에 취소표가 나오면 알려드려요."
+    except Exception:
+        reply += "\n(회차 확인 조회는 실패했지만 등록은 됐어요)"
+    return reply, True
 
 
 def _cmd_list(config: dict):

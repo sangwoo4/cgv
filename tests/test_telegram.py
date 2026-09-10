@@ -10,6 +10,11 @@ TODAY = datetime.date(2026, 9, 10)
 @pytest.fixture
 def fake_lookup(monkeypatch):
     monkeypatch.setattr(
+        telegram.watcher,
+        "fetch_watch",
+        lambda w: ([{"scnYmd": "20260912", "scnsrtTm": "1800", "scnsNm": "IMAX관", "frSeatCnt": "0"}], ["scope"]),
+    )
+    monkeypatch.setattr(
         telegram.lookup,
         "find_theaters",
         lambda q: [{"siteNo": "0013", "siteNm": "용산아이파크몰"}] if "용산" in q else [],
@@ -79,3 +84,16 @@ def test_command_with_botname_suffix(fake_lookup):
     config = {"watches": []}
     reply, _ = telegram.handle_command("/list@cgv_alarm_bot", config, TODAY)
     assert "감시" in reply
+
+
+def test_watch_reply_lists_matching_shows(fake_lookup):
+    config = {"watches": []}
+    reply, _ = telegram.handle_command("/watch 용산 오디세이 0912 18:00", config, TODAY)
+    assert "매칭 회차 1개" in reply and "매진" in reply
+
+
+def test_watch_reply_warns_when_no_match(fake_lookup, monkeypatch):
+    monkeypatch.setattr(telegram.watcher, "fetch_watch", lambda w: ([], ["scope"]))
+    config = {"watches": []}
+    reply, changed = telegram.handle_command("/watch 용산 오디세이 0912 07:77", config, TODAY)
+    assert changed and "⚠️" in reply
