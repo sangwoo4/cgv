@@ -1,0 +1,21 @@
+# CGV 취소표 감시 대상 설정
+#
+# 코드 조회:
+#   uv run cgv-alarm lookup theater 용산   → site_no
+#   uv run cgv-alarm lookup movie 오디세이  → mov_no
+#
+# 필드:
+#   site_no: 극장 코드 (필수)
+#   mov_no:  영화 코드 (생략 시 그 극장 전체 회차 감시 — 요청이 무거워지니 지정 권장)
+#   dates:   상영일 YYYYMMDD 목록 (생략 시 예매 오픈된 모든 날짜)
+#   times:   시작시간 HHMM 목록 (생략 시 전 회차. 매진 회차만 골라 넣을 필요 없음 —
+#            매진 아닌 회차는 어차피 알림이 나가지 않음)
+#
+# 예시:
+# watches:
+#   - site_no: "0013"        # 용산아이파크몰
+#     mov_no: "30001323"     # 오디세이
+#     dates: ["20260912"]
+#     times: ["1800"]
+
+watches: []

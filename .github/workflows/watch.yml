@@ -1,0 +1,50 @@
+name: watch
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      # 수동 실행 시 러너에서 CGV API가 뚫리는지(Cloudflare) 확인용
+      - name: API smoke test
+        if: github.event_name == 'workflow_dispatch'
+        run: uv run cgv-alarm lookup theater 용산
+
+      # actions/cache는 키가 불변이라, 매 실행 고유 키로 저장하고
+      # restore-keys 접두사 매칭으로 가장 최근 state를 복원한다
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}
+          restore-keys: |
+            state-
+
+      - name: Check
+        run: uv run cgv-alarm check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}
