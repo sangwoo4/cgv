@@ -9,5 +9,12 @@ watches:
   - '20260910'
   times:
   - '1730'
-opens:
-- query: 치이카와
+- site_no: 0191
+  site_nm: 홍대
+  mov_no: '30001367'
+  mov_nm: 극장판 치이카와-인어 섬의 비밀
+- site_no: '0074'
+  site_nm: 왕십리
+  mov_no: '30001367'
+  mov_nm: 극장판 치이카와-인어 섬의 비밀
+opens: []
