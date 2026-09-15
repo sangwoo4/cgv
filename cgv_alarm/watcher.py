@@ -205,6 +205,16 @@ def run_open_check(config: dict, state: dict):
     return msgs, errors, False
 
 
+def expire_past_watches(config: dict) -> list[dict]:
+    """지정 날짜가 전부 지난 감시를 제거하고 제거된 목록을 반환."""
+    today = time.strftime("%Y%m%d")
+    watches = config.get("watches") or []
+    expired = [w for w in watches if w.get("dates") and all(str(d) < today for d in w["dates"])]
+    if expired:
+        config["watches"] = [w for w in watches if w not in expired]
+    return expired
+
+
 def check_once(config_path: Path, state_path: Path) -> int:
     """1회 체크. 반환값은 프로세스 종료 코드."""
     config = configfile.load(config_path)
@@ -214,6 +224,12 @@ def check_once(config_path: Path, state_path: Path) -> int:
             state = json.loads(state_path.read_text())
         except ValueError:
             print(f"[watcher] state 파일 손상, 초기화: {state_path}")
+
+    expired = expire_past_watches(config)
+    if expired:
+        names = ", ".join(f"{w.get('site_nm', w['site_no'])} {w.get('mov_nm', '')}".strip() for w in expired)
+        notify.send_all(f"🧹 상영일이 지난 감시 {len(expired)}건을 정리했어요: {names}")
+        configfile.save(config_path, config)
 
     alerts, errors = run_check(config, state)
 

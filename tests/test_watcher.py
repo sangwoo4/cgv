@@ -181,3 +181,16 @@ def test_open_check_fuzzy_typo_notifies_once(monkeypatch):
     assert not changed and len(msgs) == 1 and "비슷한 제목" in msgs[0]
     msgs2, _, _ = watcher.run_open_check(config, state)
     assert msgs2 == []  # 같은 후보로 재알림 없음
+
+
+def test_expire_past_watches():
+    import time as _time
+    today = _time.strftime("%Y%m%d")
+    config = {"watches": [
+        {"site_no": "0059", "site_nm": "영등포", "dates": ["20200101"]},
+        {"site_no": "0191", "dates": [today]},
+        {"site_no": "0074"},  # 날짜 미지정은 만료 없음
+    ]}
+    expired = watcher.expire_past_watches(config)
+    assert len(expired) == 1 and expired[0]["site_no"] == "0059"
+    assert len(config["watches"]) == 2
