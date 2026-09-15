@@ -32,6 +32,12 @@ SCOPES = ["0013:20260912:30001323"]
 
 def run(monkeypatch, state, records, scopes=SCOPES):
     monkeypatch.setattr(watcher, "fetch_watch", lambda w: (records, scopes))
+    alerts, new_shows, errors = watcher.run_check(CONFIG, state)
+    return alerts, errors
+
+
+def run3(monkeypatch, state, records, scopes=SCOPES):
+    monkeypatch.setattr(watcher, "fetch_watch", lambda w: (records, scopes))
     return watcher.run_check(CONFIG, state)
 
 
@@ -96,7 +102,7 @@ def test_fetch_error_keeps_state(monkeypatch):
         raise watcher.api.ApiError("HTTP 403")
 
     monkeypatch.setattr(watcher, "fetch_watch", boom)
-    alerts, errors = watcher.run_check(CONFIG, state)
+    alerts, _new, errors = watcher.run_check(CONFIG, state)
     assert alerts == [] and len(errors) == 1
     assert len(state["shows"]) == 1  # 실패 시 기존 회차 유지
 
@@ -104,7 +110,7 @@ def test_fetch_error_keeps_state(monkeypatch):
 def test_fail_alert_after_threshold(monkeypatch, tmp_path):
     sent = []
     monkeypatch.setattr(watcher.notify, "send_all", lambda t: sent.append(t) or True)
-    monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], ["HTTP 403"]))
+    monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], [], ["HTTP 403"]))
     state_path = tmp_path / "state.json"
     config_path = tmp_path / "config.yaml"
     config_path.write_text("watches: []\n")
@@ -112,7 +118,7 @@ def test_fail_alert_after_threshold(monkeypatch, tmp_path):
         watcher.check_once(config_path, state_path)
     assert len(sent) == 1 and "실패" in sent[0]
     # 복구되면 카운터 리셋
-    monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], []))
+    monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], [], []))
     watcher.check_once(config_path, state_path)
     st = json.loads(state_path.read_text())
     assert st["fail_count"] == 0 and st["fail_alerted"] is False
@@ -194,3 +200,36 @@ def test_expire_past_watches():
     expired = watcher.expire_past_watches(config)
     assert len(expired) == 1 and expired[0]["site_no"] == "0059"
     assert len(config["watches"]) == 2
+
+
+def test_new_showtime_alert_after_init(monkeypatch):
+    state = {}
+    run3(monkeypatch, state, [rec(100)])  # 첫 조회: 조용히 초기화
+    _, new_shows, _ = run3(monkeypatch, state, [rec(100), rec(80, key_tm="2100")])
+    assert len(new_shows) == 1 and new_shows[0]["scnsrtTm"] == "2100"
+
+
+def test_first_fetch_with_zero_records_then_shows_appear(monkeypatch):
+    # 아직 스케줄이 없는 영화를 감시 → 나중에 회차가 뜨면 전부 새 회차 알림
+    state = {}
+    run3(monkeypatch, state, [])  # 회차 0개지만 조회 성공 → 초기화됨
+    _, new_shows, _ = run3(monkeypatch, state, [rec(50), rec(60, key_tm="2100")])
+    assert len(new_shows) == 2
+
+
+def test_first_ever_fetch_silent(monkeypatch):
+    state = {}
+    _, new_shows, _ = run3(monkeypatch, state, [rec(100), rec(80, key_tm="2100")])
+    assert new_shows == []
+
+
+def test_new_showtime_controlled_silent(monkeypatch):
+    state = {}
+    run3(monkeypatch, state, [rec(100)])
+    _, new_shows, _ = run3(monkeypatch, state, [rec(100), rec(0, key_tm="2100", cntl="Y")])
+    assert new_shows == []
+
+
+def test_new_shows_message_grouping():
+    msgs = watcher.new_shows_messages([rec(50), rec(0, key_tm="2100")])
+    assert len(msgs) == 1 and "새 회차" in msgs[0] and "21:00" in msgs[0] and "매진" in msgs[0]

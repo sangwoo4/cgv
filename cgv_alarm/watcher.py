@@ -72,23 +72,32 @@ def fetch_watch(watch: dict) -> tuple[list[dict], list[str]]:
     return records, scopes
 
 
-def run_check(config: dict, state: dict) -> tuple[list[dict], list[str]]:
-    """state를 제자리 갱신하고 (알림 대상 레코드, 오류 메시지) 반환."""
+def run_check(config: dict, state: dict) -> tuple[list[dict], list[dict], list[str]]:
+    """state를 제자리 갱신하고 (취소표 알림, 새 회차 알림, 오류) 반환.
+
+    새 회차 알림: 이미 한 번 이상 조회했던 감시 범위(극장×영화)에
+    처음 보는 회차가 나타나면 — 즉 상영 스케줄이 추가로 열리면 알린다.
+    감시를 처음 등록한 직후의 첫 조회는 조용히 기록만 한다.
+    """
     shows: dict = state.setdefault("shows", {})
+    inited: set = set(state.get("initialized_watches") or [])
     observed: dict[str, dict] = {}
     fetched_scopes: list[str] = []
+    fetched_fps: list[str] = []
     errors: list[str] = []
 
     for watch in config.get("watches") or []:
         try:
             records, scopes = fetch_watch(watch)
             fetched_scopes.extend(scopes)
+            fetched_fps.append(f"{watch['site_no']}:{watch.get('mov_no') or '*'}")
             for rec in records:
                 observed[show_key(rec)] = rec
         except Exception as e:
             errors.append(f"watch {watch.get('site_no')}/{watch.get('mov_no', '*')}: {e}")
 
     alerts: list[dict] = []
+    new_shows: list[dict] = []
     for key, rec in observed.items():
         try:
             cnt = int(rec.get("frSeatCnt"))
@@ -96,6 +105,9 @@ def run_check(config: dict, state: dict) -> tuple[list[dict], list[str]]:
             errors.append(f"frSeatCnt 파싱 불가: {key}")
             continue
         prev = shows.get(key)
+        fp_known = f"{rec['siteNo']}:{rec['movNo']}" in inited or f"{rec['siteNo']}:*" in inited
+        if prev is None and fp_known and rec.get("cntlYn") == "N":
+            new_shows.append(rec)
         if (
             prev is not None
             and prev.get("frSeatCnt") == 0
@@ -105,6 +117,8 @@ def run_check(config: dict, state: dict) -> tuple[list[dict], list[str]]:
             alerts.append(rec)
         shows[key] = {"frSeatCnt": cnt}
 
+    state["initialized_watches"] = sorted(inited | set(fetched_fps))
+
     # 조회에 성공한 scope에서 사라진 회차(상영 시작/취소)는 state에서 제거
     def covered(key: str) -> bool:
         site, ymd, _scns, _tm, mov = key.split(":")
@@ -113,7 +127,28 @@ def run_check(config: dict, state: dict) -> tuple[list[dict], list[str]]:
     for key in [k for k in shows if k not in observed and covered(k)]:
         del shows[key]
 
-    return alerts, errors
+    return alerts, new_shows, errors
+
+
+def new_shows_messages(recs: list[dict]) -> list[str]:
+    """새로 열린 회차들을 극장×영화 단위로 묶어 메시지로."""
+    grouped: dict = {}
+    for r in recs:
+        grouped.setdefault((r["siteNm"], r["movNm"], r["bzplcNo"]), []).append(r)
+    msgs = []
+    for (site, mov, bzplc), rows in grouped.items():
+        rows.sort(key=lambda r: (r["scnYmd"], r["scnsrtTm"]))
+        lines = ["🆕 새 회차가 열렸어요!", f"{mov} · {site}"]
+        for r in rows[:8]:
+            st = "매진" if int(r["frSeatCnt"]) == 0 else f"잔여 {r['frSeatCnt']}석"
+            lines.append(
+                f"- {format_date(r['scnYmd'])} {format_time(r['scnsrtTm'])} {r['scnsNm']} · {st}"
+            )
+        if len(rows) > 8:
+            lines.append(f"… 외 {len(rows) - 8}개")
+        lines.append(f"예매: https://cgv.co.kr/cnm/bzplcCgv/{bzplc}")
+        msgs.append("\n".join(lines))
+    return msgs
 
 
 def _fuzzy_candidates(query: str, movies: list[dict], threshold: float = 0.75) -> list[dict]:
@@ -231,11 +266,15 @@ def check_once(config_path: Path, state_path: Path) -> int:
         notify.send_all(f"🧹 상영일이 지난 감시 {len(expired)}건을 정리했어요: {names}")
         configfile.save(config_path, config)
 
-    alerts, errors = run_check(config, state)
+    alerts, new_shows, errors = run_check(config, state)
 
     for rec in alerts:
         msg = alert_message(rec)
         print(f"[watcher] 취소표! {show_key(rec)} → {rec['frSeatCnt']}석")
+        notify.send_all(msg)
+
+    for msg in new_shows_messages(new_shows):
+        print(f"[watcher] 새 회차 {len(new_shows)}개 감지")
         notify.send_all(msg)
 
     open_msgs, open_errors, config_changed = run_open_check(config, state)
