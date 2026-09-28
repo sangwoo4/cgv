@@ -46,7 +46,7 @@ def cmd_status(config: dict) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="cgv-alarm", description="CGV 취소표 알림")
+    parser = argparse.ArgumentParser(prog="cgv-alarm", description="CGV 새 회차·예매 오픈 알림")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--state", default="state.json")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -68,7 +68,7 @@ def main() -> None:
         (lookup.print_theaters if args.kind == "theater" else lookup.print_movies)(args.name)
         return
     if args.cmd == "test-notify":
-        ok = notify.send_all("✅ CGV 취소표 알람 테스트 메시지입니다.")
+        ok = notify.send_all("✅ CGV 알람 테스트 메시지입니다.")
         sys.exit(0 if ok else 1)
 
     if args.cmd == "status":

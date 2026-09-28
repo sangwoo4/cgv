@@ -13,9 +13,9 @@ from pathlib import Path
 import requests
 from . import configfile, lookup, watcher
 
-HELP = """CGV 취소표 알람 봇 명령:
+HELP = """CGV 알람 봇 명령:
 
-/watch 극장 [영화] [날짜] [시간] — 감시 등록\n  매진 회차의 취소표 + 새로 열리는 회차(스케줄 추가)를 알림
+/watch 극장 [영화] [날짜] [시간] — 감시 등록\n  새로 열리는 회차(스케줄 추가)를 알림
   예: /watch 용산 오디세이 0912 18:00
   날짜는 0912 또는 20260912, 시간은 18:00 형식 (여러 개 가능)
   영화 생략 시 극장 전체, 날짜 생략 시 예매 오픈된 전 날짜
@@ -28,7 +28,7 @@ HELP = """CGV 취소표 알람 봇 명령:
 /help — 이 도움말
 
 명령 처리는 최대 5~10분 걸릴 수 있어요.
-매진 회차에 취소표가 나오면 바로 알려드립니다."""
+감시 범위에 새 회차가 열리면 바로 알려드립니다."""
 
 def _expand_date(mmdd: str, today: datetime.date) -> str:
     """MMDD → YYYYMMDD. 이미 지난 날짜면 내년으로 해석."""
@@ -115,8 +115,7 @@ def _cmd_watch(tokens: list[str], config: dict, today: datetime.date):
                 "\n날짜/시간이 정확한지 확인해보세요 (시간은 상영시간표의 시작시간과 같아야 해요)."
             )
         else:
-            sold = sum(1 for r in records if int(r["frSeatCnt"]) == 0)
-            reply += f"\n매칭 회차 {len(records)}개 (현재 매진 {sold}개):"
+            reply += f"\n매칭 회차 {len(records)}개:"
             for r in records[:5]:
                 state = "매진" if int(r["frSeatCnt"]) == 0 else f"잔여 {r['frSeatCnt']}석"
                 reply += (
@@ -125,7 +124,7 @@ def _cmd_watch(tokens: list[str], config: dict, today: datetime.date):
                 )
             if len(records) > 5:
                 reply += f"\n… 외 {len(records) - 5}개"
-            reply += "\n매진 회차에 취소표가 나오면 알려드려요."
+            reply += "\n이 범위에 새 회차가 추가로 열리면 알려드려요."
     except Exception:
         reply += "\n(회차 확인 조회는 실패했지만 등록은 됐어요)"
     return reply, True
@@ -163,7 +162,7 @@ def _cmd_open(tokens: list[str], config: dict):
     if movies:
         fired, msg = watcher._check_open_watch(ow, movies)
         if fired:
-            return "이미 예매가 열려 있어요!\n" + msg.split("\n(")[0] + "\n매진 회차 취소표는 /watch로 감시하세요.", False
+            return "이미 예매가 열려 있어요!\n" + msg.split("\n(")[0] + "\n추가로 열리는 회차는 /watch로 감시하세요.", False
         # 전국 기준으론 오픈됐지만 지정 극장엔 아직 → 극장 오픈 대기로 등록 (아래로 진행)
 
     opens = config.get("opens") or []

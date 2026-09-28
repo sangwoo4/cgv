@@ -32,59 +32,14 @@ SCOPES = ["0013:20260912:30001323"]
 
 def run(monkeypatch, state, records, scopes=SCOPES):
     monkeypatch.setattr(watcher, "fetch_watch", lambda w: (records, scopes))
-    alerts, new_shows, errors = watcher.run_check(CONFIG, state)
-    return alerts, errors
-
-
-def run3(monkeypatch, state, records, scopes=SCOPES):
-    monkeypatch.setattr(watcher, "fetch_watch", lambda w: (records, scopes))
     return watcher.run_check(CONFIG, state)
 
 
-def test_first_observation_no_alert(monkeypatch):
+def test_first_observation_recorded_silently(monkeypatch):
     state = {}
-    alerts, errors = run(monkeypatch, state, [rec(0)])
-    assert alerts == [] and errors == []
-    assert list(state["shows"].values()) == [{"frSeatCnt": 0}]
-
-
-def test_soldout_to_available_alerts(monkeypatch):
-    state = {}
-    run(monkeypatch, state, [rec(0)])
-    alerts, _ = run(monkeypatch, state, [rec(3)])
-    assert len(alerts) == 1 and alerts[0]["frSeatCnt"] == "3"
-
-
-def test_available_increase_no_alert(monkeypatch):
-    state = {}
-    run(monkeypatch, state, [rec(3)])
-    alerts, _ = run(monkeypatch, state, [rec(5)])
-    assert alerts == []
-
-
-def test_no_realert_while_available(monkeypatch):
-    state = {}
-    run(monkeypatch, state, [rec(0)])
-    run(monkeypatch, state, [rec(2)])  # 알림 1회
-    alerts, _ = run(monkeypatch, state, [rec(2)])
-    assert alerts == []
-
-
-def test_realert_after_resoldout(monkeypatch):
-    state = {}
-    run(monkeypatch, state, [rec(0)])
-    run(monkeypatch, state, [rec(1)])
-    run(monkeypatch, state, [rec(0)])  # 재매진
-    alerts, _ = run(monkeypatch, state, [rec(1)])
-    assert len(alerts) == 1
-
-
-def test_controlled_show_no_alert(monkeypatch):
-    # cntlYn=Y는 판매통제 → 0에서 풀려도 통제 중이면 알림 금지
-    state = {}
-    run(monkeypatch, state, [rec(0, cntl="Y")])
-    alerts, _ = run(monkeypatch, state, [rec(134, cntl="Y")])
-    assert alerts == []
+    new_shows, errors = run(monkeypatch, state, [rec(0)])
+    assert new_shows == [] and errors == []
+    assert len(state["shows"]) == 1
 
 
 def test_disappeared_show_pruned(monkeypatch):
@@ -102,15 +57,15 @@ def test_fetch_error_keeps_state(monkeypatch):
         raise watcher.api.ApiError("HTTP 403")
 
     monkeypatch.setattr(watcher, "fetch_watch", boom)
-    alerts, _new, errors = watcher.run_check(CONFIG, state)
-    assert alerts == [] and len(errors) == 1
+    new_shows, errors = watcher.run_check(CONFIG, state)
+    assert new_shows == [] and len(errors) == 1
     assert len(state["shows"]) == 1  # 실패 시 기존 회차 유지
 
 
 def test_fail_alert_after_threshold(monkeypatch, tmp_path):
     sent = []
     monkeypatch.setattr(watcher.notify, "send_all", lambda t: sent.append(t) or True)
-    monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], [], ["HTTP 403"]))
+    monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], ["HTTP 403"]))
     state_path = tmp_path / "state.json"
     config_path = tmp_path / "config.yaml"
     config_path.write_text("watches: []\n")
@@ -118,7 +73,7 @@ def test_fail_alert_after_threshold(monkeypatch, tmp_path):
         watcher.check_once(config_path, state_path)
     assert len(sent) == 1 and "실패" in sent[0]
     # 복구되면 카운터 리셋
-    monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], [], []))
+    monkeypatch.setattr(watcher, "run_check", lambda c, s: ([], []))
     watcher.check_once(config_path, state_path)
     st = json.loads(state_path.read_text())
     assert st["fail_count"] == 0 and st["fail_alerted"] is False
@@ -204,30 +159,38 @@ def test_expire_past_watches():
 
 def test_new_showtime_alert_after_init(monkeypatch):
     state = {}
-    run3(monkeypatch, state, [rec(100)])  # 첫 조회: 조용히 초기화
-    _, new_shows, _ = run3(monkeypatch, state, [rec(100), rec(80, key_tm="2100")])
+    run(monkeypatch, state, [rec(100)])  # 첫 조회: 조용히 초기화
+    new_shows, _ = run(monkeypatch, state, [rec(100), rec(80, key_tm="2100")])
     assert len(new_shows) == 1 and new_shows[0]["scnsrtTm"] == "2100"
 
 
 def test_first_fetch_with_zero_records_then_shows_appear(monkeypatch):
     # 아직 스케줄이 없는 영화를 감시 → 나중에 회차가 뜨면 전부 새 회차 알림
     state = {}
-    run3(monkeypatch, state, [])  # 회차 0개지만 조회 성공 → 초기화됨
-    _, new_shows, _ = run3(monkeypatch, state, [rec(50), rec(60, key_tm="2100")])
+    run(monkeypatch, state, [])  # 회차 0개지만 조회 성공 → 초기화됨
+    new_shows, _ = run(monkeypatch, state, [rec(50), rec(60, key_tm="2100")])
     assert len(new_shows) == 2
 
 
 def test_first_ever_fetch_silent(monkeypatch):
     state = {}
-    _, new_shows, _ = run3(monkeypatch, state, [rec(100), rec(80, key_tm="2100")])
+    new_shows, _ = run(monkeypatch, state, [rec(100), rec(80, key_tm="2100")])
     assert new_shows == []
 
 
 def test_new_showtime_controlled_silent(monkeypatch):
     state = {}
-    run3(monkeypatch, state, [rec(100)])
-    _, new_shows, _ = run3(monkeypatch, state, [rec(100), rec(0, key_tm="2100", cntl="Y")])
+    run(monkeypatch, state, [rec(100)])
+    new_shows, _ = run(monkeypatch, state, [rec(100), rec(0, key_tm="2100", cntl="Y")])
     assert new_shows == []
+
+
+def test_no_alert_on_seat_count_change(monkeypatch):
+    # 취소표 기능 제거: 매진(0) → 잔여석 발생해도 알림 없음
+    state = {}
+    run(monkeypatch, state, [rec(0)])
+    new_shows, errors = run(monkeypatch, state, [rec(3)])
+    assert new_shows == [] and errors == []
 
 
 def test_new_shows_message_grouping():

@@ -1,4 +1,4 @@
-"""매진 회차의 취소표(frSeatCnt 0 → 양수) 전환 감지.
+"""감시 범위(극장×영화)에 새 회차가 열리는지 감지.
 
 1회 실행 → 상태 비교 → 알림 → 상태 저장 후 종료하는 구조.
 GitHub Actions cron이 반복시키고, VPS/로컬에서는 loop 명령이 감싼다.
@@ -31,26 +31,6 @@ def format_date(ymd: str) -> str:
     return f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
 
 
-def alert_message(rec: dict) -> str:
-    extra = ""
-    try:
-        tmp = int(rec.get("frtmpSeatCnt", 0)) - int(rec.get("frSeatCnt", 0))
-        if tmp > 0:
-            extra = f" (+선점 중 {tmp}석)"
-    except ValueError:
-        pass
-    return "\n".join(
-        [
-            "🎬 취소표 발견!",
-            f"{rec['movNm']} · {rec['scnsNm']}",
-            rec["siteNm"],
-            f"{format_date(rec['scnYmd'])} {format_time(rec['scnsrtTm'])} 시작",
-            f"잔여 {rec['frSeatCnt']}석{extra}",
-            f"예매: https://cgv.co.kr/cnm/bzplcCgv/{rec['bzplcNo']}",
-        ]
-    )
-
-
 def fetch_watch(watch: dict) -> tuple[list[dict], list[str]]:
     """watch 하나의 회차 레코드들과, 성공적으로 조회한 scope 목록을 반환."""
     site_no = str(watch["site_no"])
@@ -72,8 +52,8 @@ def fetch_watch(watch: dict) -> tuple[list[dict], list[str]]:
     return records, scopes
 
 
-def run_check(config: dict, state: dict) -> tuple[list[dict], list[dict], list[str]]:
-    """state를 제자리 갱신하고 (취소표 알림, 새 회차 알림, 오류) 반환.
+def run_check(config: dict, state: dict) -> tuple[list[dict], list[str]]:
+    """state를 제자리 갱신하고 (새 회차 알림, 오류) 반환.
 
     새 회차 알림: 이미 한 번 이상 조회했던 감시 범위(극장×영화)에
     처음 보는 회차가 나타나면 — 즉 상영 스케줄이 추가로 열리면 알린다.
@@ -96,26 +76,12 @@ def run_check(config: dict, state: dict) -> tuple[list[dict], list[dict], list[s
         except Exception as e:
             errors.append(f"watch {watch.get('site_no')}/{watch.get('mov_no', '*')}: {e}")
 
-    alerts: list[dict] = []
     new_shows: list[dict] = []
     for key, rec in observed.items():
-        try:
-            cnt = int(rec.get("frSeatCnt"))
-        except (TypeError, ValueError):
-            errors.append(f"frSeatCnt 파싱 불가: {key}")
-            continue
-        prev = shows.get(key)
         fp_known = f"{rec['siteNo']}:{rec['movNo']}" in inited or f"{rec['siteNo']}:*" in inited
-        if prev is None and fp_known and rec.get("cntlYn") == "N":
+        if key not in shows and fp_known and rec.get("cntlYn") == "N":
             new_shows.append(rec)
-        if (
-            prev is not None
-            and prev.get("frSeatCnt") == 0
-            and cnt > 0
-            and rec.get("cntlYn") == "N"
-        ):
-            alerts.append(rec)
-        shows[key] = {"frSeatCnt": cnt}
+        shows[key] = {}
 
     state["initialized_watches"] = sorted(inited | set(fetched_fps))
 
@@ -127,7 +93,7 @@ def run_check(config: dict, state: dict) -> tuple[list[dict], list[dict], list[s
     for key in [k for k in shows if k not in observed and covered(k)]:
         del shows[key]
 
-    return alerts, new_shows, errors
+    return new_shows, errors
 
 
 def new_shows_messages(recs: list[dict]) -> list[str]:
@@ -176,7 +142,7 @@ def _check_open_watch(ow: dict, movies: list[dict]):
         rate = f" · 예매율 {m['atktRate']}%" if m.get("atktRate") else ""
         return True, (
             f"🎟 예매 오픈!\n{m['movNm']}{rate}\nhttps://cgv.co.kr\n"
-            "(이 오픈 알림은 자동 해제됐어요. 원하는 회차가 매진되면 /watch로 취소표 감시를 등록하세요.)"
+            "(이 오픈 알림은 자동 해제됐어요. 추가로 열리는 회차를 알림받으려면 /watch로 등록하세요.)"
         )
     # 극장 한정: 그 극장 시간표에 해당 영화 회차가 뜨는지
     site = str(ow["site_no"])
@@ -266,12 +232,7 @@ def check_once(config_path: Path, state_path: Path) -> int:
         notify.send_all(f"🧹 상영일이 지난 감시 {len(expired)}건을 정리했어요: {names}")
         configfile.save(config_path, config)
 
-    alerts, new_shows, errors = run_check(config, state)
-
-    for rec in alerts:
-        msg = alert_message(rec)
-        print(f"[watcher] 취소표! {show_key(rec)} → {rec['frSeatCnt']}석")
-        notify.send_all(msg)
+    new_shows, errors = run_check(config, state)
 
     for msg in new_shows_messages(new_shows):
         print(f"[watcher] 새 회차 {len(new_shows)}개 감지")
@@ -300,9 +261,8 @@ def check_once(config_path: Path, state_path: Path) -> int:
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=1))
 
     shows = state.get("shows", {})
-    sold_out = sum(1 for s in shows.values() if s["frSeatCnt"] == 0)
     print(
-        f"[watcher] 감시 중 {len(shows)}개 회차 (매진 {sold_out}) + 오픈 대기 "
-        f"{len(config.get('opens') or [])}건, 알림 {len(alerts) + len(open_msgs)}건, 오류 {len(errors)}건"
+        f"[watcher] 감시 중 {len(shows)}개 회차 + 오픈 대기 "
+        f"{len(config.get('opens') or [])}건, 알림 {len(new_shows) + len(open_msgs)}건, 오류 {len(errors)}건"
     )
     return 0

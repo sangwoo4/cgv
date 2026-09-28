@@ -1,7 +1,7 @@
 [project]
 name = "cgv-alarm"
 version = "0.1.0"
-description = "CGV 매진 회차 취소표 알림"
+description = "CGV 새 회차·예매 오픈 알림"
 requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32",
